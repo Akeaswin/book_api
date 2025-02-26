@@ -1,59 +1,71 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
+from pymongo import MongoClient
+import os
 
 app = Flask(__name__)
+CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
 
-# Sample data (in-memory database for simplicity)
-books = [
-    {"id": 1, "title": "Book 1", "author": "Author 1"},
-    {"id": 2, "title": "Book 2", "author": "Author 2"},
-    {"id": 3, "title": "Book 3", "author": "Author 3"}
-]
+# เชื่อมต่อ MongoDB Atlas (ใช้ environment variable หรือซ่อนไม่ให้ใส่ใน GitHub)
+MONGO_URI = os.getenv("mongodb+srv://USER:password@cluster0.qp5pw.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+client = MongoClient(MONGO_URI)
+db = client["bookstore"]  # ตั้งชื่อ database เป็น "bookstore"
+collection = db["books"]   # ตั้งชื่อ collection เป็น "books"
 
-# Create (POST) operation
+@app.route("/")
+def hello_world():
+    return "<p>Hello, World!</p>"
+
+# Create (POST) - เพิ่มหนังสือใหม่ลง MongoDB
 @app.route('/books', methods=['POST'])
 def create_book():
     data = request.get_json()
-
+    if not data.get("title") or not data.get("author") or not data.get("image_url"):
+        return jsonify({"error": "Missing required fields"}), 400
+    
     new_book = {
-        "id": len(books) + 1,
         "title": data["title"],
-        "author": data["author"]
+        "author": data["author"],
+        "image_url": data["image_url"]
     }
-
-    books.append(new_book)
+    
+    inserted_book = collection.insert_one(new_book)
+    new_book["_id"] = str(inserted_book.inserted_id)  # แปลง ObjectId เป็น string
     return jsonify(new_book), 201
 
-# Read (GET) operation - Get all books
+# Read (GET) - ดึงรายการหนังสือทั้งหมดจาก MongoDB
 @app.route('/books', methods=['GET'])
 def get_all_books():
+    books = list(collection.find({}, {"_id": 0}))  # เอา `_id` ออกเพื่อให้ frontend ใช้ง่าย
     return jsonify({"books": books})
 
-# Read (GET) operation - Get a specific book by ID
-@app.route('/books/<int:book_id>', methods=['GET'])
-def get_book(book_id):
-    book = next((b for b in books if b["id"] == book_id), None)
+# Read (GET) - ดึงหนังสือที่มี ID เฉพาะ
+@app.route('/books/<book_title>', methods=['GET'])
+def get_book(book_title):
+    book = collection.find_one({"title": book_title}, {"_id": 0})
     if book:
         return jsonify(book)
-    else:
-        return jsonify({"error": "Book not found"}), 404
+    return jsonify({"error": "Book not found"}), 404
 
-# Update (PUT) operation
-@app.route('/books/<int:book_id>', methods=['PUT'])
-def update_book(book_id):
-    book = next((b for b in books if b["id"] == book_id), None)
-    if book:
-        data = request.get_json()
-        book.update(data)
-        return jsonify(book)
-    else:
+# Update (PUT) - แก้ไขข้อมูลหนังสือ
+@app.route('/books/<book_title>', methods=['PUT'])
+def update_book(book_title):
+    data = request.get_json()
+    update_result = collection.update_one({"title": book_title}, {"$set": data})
+    
+    if update_result.matched_count == 0:
         return jsonify({"error": "Book not found"}), 404
+    return jsonify({"message": "Book updated successfully"}), 200
 
-# Delete operation
-@app.route('/books/<int:book_id>', methods=['DELETE'])
-def delete_book(book_id):
-    global books
-    books = [b for b in books if b["id"] != book_id]
-    return jsonify({"message": "Book deleted successfully"})
+# Delete (DELETE) - ลบหนังสือออกจาก MongoDB
+@app.route('/books/<book_title>', methods=['DELETE'])
+def delete_book(book_title):
+    delete_result = collection.delete_one({"title": book_title})
+    
+    if delete_result.deleted_count == 0:
+        return jsonify({"error": "Book not found"}), 404
+    return jsonify({"message": "Book deleted successfully"}), 200
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5001, debug=True)
